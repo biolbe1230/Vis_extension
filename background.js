@@ -1,7 +1,7 @@
 // background.js
 
-let lastX = null;
 let lastSwitchTime = 0;
+const injectedTabs = new Set();
 
 // 1. 启动离屏文档
 chrome.runtime.onInstalled.addListener(async () => {
@@ -17,61 +17,103 @@ async function createOffscreen() {
   });
 }
 
+function ensureContentScript(tabId, callback = () => {}) {
+  if (injectedTabs.has(tabId)) {
+    callback(true);
+    return;
+  }
+
+  chrome.scripting.executeScript(
+    {
+      target: { tabId },
+      files: ['content.js']
+    },
+    () => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        console.warn('Content injection failed:', err.message);
+        injectedTabs.delete(tabId);
+        callback(false);
+        return;
+      }
+
+      injectedTabs.add(tabId);
+      callback(true);
+    }
+  );
+}
+
+function sendHandMessage(tabId, payload) {
+  chrome.tabs.sendMessage(tabId, payload).catch(() => {
+    injectedTabs.delete(tabId);
+  });
+}
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  ensureContentScript(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    injectedTabs.delete(tabId);
+  }
+
+  if (changeInfo.status === 'complete') {
+    ensureContentScript(tabId);
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  injectedTabs.delete(tabId);
+});
+
 // 2. 核心逻辑
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'HAND_DATA') {
     const landmarks = message.landmarks;
     
-    // --- 逻辑 A: 处理 Tab 切换 (四指张开 + 左右挥动) ---
+    // --- 逻辑 A: 处理 Tab 切换 (剪刀手摆动) ---
     handleTabSwitch(landmarks);
 
     // --- 逻辑 B: 转发给 Content (用于绘制和滚动) ---
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs.length > 0) {
-        chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
-      }
+      if (tabs.length === 0) return;
+
+      const tabId = tabs[0].id;
+      ensureContentScript(tabId, () => {
+        sendHandMessage(tabId, message);
+      });
     });
   }
 });
 
 function handleTabSwitch(landmarks) {
-    const now = Date.now();
-    // 冷却时间 1秒，防止误触
-    if (now - lastSwitchTime < 1000) return;
+  const now = Date.now();
+  // 冷却时间 1秒，防止误触
+  if (now - lastSwitchTime < 1000) return;
 
-    // 1. 简单的姿态识别：判断四指是否张开 (指尖 y < 指根 y，注意坐标系 y 向下为大)
-    // 8:食指, 12:中指, 16:无名指, 20:小指
-    // 5, 9, 13, 17 分别是对应的指根关节
-    const isFourFingersUp = 
-        landmarks[8].y < landmarks[5].y &&
-        landmarks[12].y < landmarks[9].y &&
-        landmarks[16].y < landmarks[13].y &&
-        landmarks[20].y < landmarks[17].y;
+  // 要求：食指、中指伸直；无名指、小指收回
+  const indexExtended = landmarks[8].y < landmarks[6].y;
+  const middleExtended = landmarks[12].y < landmarks[10].y;
+  const ringCurled = landmarks[16].y > landmarks[14].y;
+  const pinkyCurled = landmarks[20].y > landmarks[18].y;
 
-    if (isFourFingersUp) {
-        // 使用手腕(0)的 x 坐标来判断移动
-        const currentX = landmarks[0].x;
+  if (!(indexExtended && middleExtended && ringCurled && pinkyCurled)) return;
 
-        if (lastX !== null) {
-            const diff = currentX - lastX;
-            // 灵敏度阈值：移动超过 0.05 (约屏幕宽度的5%)
-            // 注意：摄像头是镜像的，手向右移，x 会变小(还是变大取决于镜像设置)，通常 x 变大是向左(屏幕视角)
-            
-            if (diff > 0.05) { 
-                // 向左挥 (切换到左边的 Tab)
-                switchTab(-1);
-                lastSwitchTime = now;
-            } else if (diff < -0.05) {
-                // 向右挥 (切换到右边的 Tab)
-                switchTab(1);
-                lastSwitchTime = now;
-            }
-        }
-        lastX = currentX;
-    } else {
-        // 如果手没张开，重置位置记录，防止瞬移误判
-        lastX = null;
-    }
+  // 利用食指、中指的水平朝向决定切换方向
+  const indexDir = landmarks[8].x - landmarks[6].x;
+  const middleDir = landmarks[12].x - landmarks[10].x;
+  const avgDir = (indexDir + middleDir) / 2;
+  const DIRECTION_THRESHOLD = 0.02;
+
+  if (avgDir > DIRECTION_THRESHOLD) {
+    // 摄像头镜像下，x 增大通常意味着屏幕视角向左
+    switchTab(-1);
+    lastSwitchTime = now;
+  } else if (avgDir < -DIRECTION_THRESHOLD) {
+    switchTab(1);
+    lastSwitchTime = now;
+  }
 }
 
 function switchTab(direction) {

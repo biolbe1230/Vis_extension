@@ -69,29 +69,47 @@ chrome.runtime.onMessage.addListener((request) => {
 });
 
 function handleScroll(landmarks) {
-    // 获取食指指尖 (Index 8)
+    // 排除食指 (8, 5)，只检查中指、无名指、小指是否握拳
+    // 这样食指可以自由伸直用于控制方向
+    const fingerPairs = [
+        [12, 9], // middle
+        [16, 13], // ring
+        [20, 17]  // pinky
+    ];
+
+    const isFist = fingerPairs.every(([tip, mcp]) => landmarks[tip].y > landmarks[mcp].y);
+    if (!isFist) return;
+
     const indexTip = landmarks[8];
-    const y = indexTip.y; // 0 是顶部, 1 是底部
+    const indexDip = landmarks[7];
+    const indexPip = landmarks[6];
 
-    // 阈值设置
-    const UP_THRESHOLD = 0.2;   // 顶部 20%
-    const DOWN_THRESHOLD = 0.8; // 底部 20%
-    const SCROLL_SPEED = 15;    // 滚动速度 (像素/帧)
+    const vecX = indexTip.x - indexDip.x;
+    const vecY = indexTip.y - indexDip.y;
+    const magnitude = Math.hypot(vecX, vecY);
+    if (magnitude < 0.02) return;
 
-    // 只有当“不是”四指张开状态时才滚动 (避免和切 Tab 冲突)
-    // 简单的判定：如果小指(20)弯曲了 (y > 小指根部(17).y)
-    const isPinkyCurled = landmarks[20].y > landmarks[17].y;
+    const directionY = vecY / magnitude;
+    const DIRECTION_THRESHOLD = 0.5;
 
-    if (isPinkyCurled) {
-        if (y < UP_THRESHOLD) {
-            // 向上滚动
-            window.scrollBy(0, -SCROLL_SPEED);
-            drawIndicator("⬆️ 向上滚动");
-        } else if (y > DOWN_THRESHOLD) {
-            // 向下滚动
-            window.scrollBy(0, SCROLL_SPEED);
-            drawIndicator("⬇️ 向下滚动");
-        }
+    const vTip = { x: indexTip.x - indexDip.x, y: indexTip.y - indexDip.y };
+    const vBase = { x: indexPip.x - indexDip.x, y: indexPip.y - indexDip.y };
+    const magTip = Math.hypot(vTip.x, vTip.y);
+    const magBase = Math.hypot(vBase.x, vBase.y);
+    if (magTip === 0 || magBase === 0) return;
+
+    const dot = vTip.x * vBase.x + vTip.y * vBase.y;
+    const angle = Math.acos(Math.min(Math.max(dot / (magTip * magBase), -1), 1)); // radians
+
+    const MAX_SCROLL_SPEED = 40;
+    const scrollSpeed = (angle / Math.PI) * MAX_SCROLL_SPEED;
+
+    if (directionY <= -DIRECTION_THRESHOLD) {
+        window.scrollBy(0, -scrollSpeed);
+        drawIndicator(`⬆️ 向上滚动 ${scrollSpeed.toFixed(0)}`);
+    } else if (directionY >= DIRECTION_THRESHOLD) {
+        window.scrollBy(0, scrollSpeed);
+        drawIndicator(`⬇️ 向下滚动 ${scrollSpeed.toFixed(0)}`);
     }
 }
 

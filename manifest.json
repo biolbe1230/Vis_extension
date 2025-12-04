@@ -6,17 +6,13 @@
   "permissions": [
     "offscreen",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"]
-    }
-  ],
   "web_accessible_resources": [
     {
       "resources": ["offscreen.html", "vision_bundle.js", "wasm/*"],
