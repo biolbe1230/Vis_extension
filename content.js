@@ -105,12 +105,51 @@ function handleScroll(landmarks) {
     const scrollSpeed = (angle / Math.PI) * MAX_SCROLL_SPEED;
 
     if (directionY <= -DIRECTION_THRESHOLD) {
-        window.scrollBy(0, -scrollSpeed);
+        scrollAtFinger(landmarks, -scrollSpeed);
         drawIndicator(`⬆️ 向上滚动 ${scrollSpeed.toFixed(0)}`);
     } else if (directionY >= DIRECTION_THRESHOLD) {
-        window.scrollBy(0, scrollSpeed);
+        scrollAtFinger(landmarks, scrollSpeed);
         drawIndicator(`⬇️ 向下滚动 ${scrollSpeed.toFixed(0)}`);
     }
+}
+
+function scrollAtFinger(landmarks, deltaY) {
+    const tip = landmarks[8];
+    const screenX = (1 - tip.x) * window.innerWidth;
+    const screenY = tip.y * window.innerHeight;
+    const target = document.elementFromPoint(screenX, screenY);
+    if (!target) return;
+
+    const scrollable = findScrollableAncestor(target);
+    if (!scrollable) return;
+
+    if (scrollable === document.body || scrollable === document.documentElement) {
+        window.scrollBy({ top: deltaY, behavior: 'auto' });
+    } else {
+        scrollable.scrollTop += deltaY;
+    }
+
+    const wheelEvent = new WheelEvent('wheel', {
+        deltaY,
+        clientX: screenX,
+        clientY: screenY,
+        bubbles: true,
+        cancelable: true
+    });
+    scrollable.dispatchEvent(wheelEvent);
+}
+
+function findScrollableAncestor(element) {
+    let node = element;
+    while (node && node !== document.body) {
+        const style = window.getComputedStyle(node);
+        const canScroll = /(auto|scroll)/.test(style.overflowY);
+        if (canScroll && node.scrollHeight > node.clientHeight) {
+            return node;
+        }
+        node = node.parentElement;
+    }
+    return document.scrollingElement || document.documentElement;
 }
 
 // 辅助显示：让用户知道触发了滚动
