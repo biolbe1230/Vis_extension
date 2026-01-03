@@ -1,13 +1,16 @@
-import { FilesetResolver, HandLandmarker } from "./vision_bundle.js";
+import { FilesetResolver, HandLandmarker, FaceLandmarker } from "./vision_bundle.js";
 
 let handLandmarker = undefined;
+let faceLandmarker = undefined;
 const video = document.getElementById("webcam");
 let lastVideoTime = -1;
 
 // 1. 初始化保持不变
-async function createHandLandmarker() {
+async function createLandmarkers() {
   try {
     const vision = await FilesetResolver.forVisionTasks("./wasm");
+    
+    // 创建手部模型
     handLandmarker = await HandLandmarker.createFromOptions(vision, {
       baseOptions: {
         modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
@@ -16,6 +19,18 @@ async function createHandLandmarker() {
       runningMode: "VIDEO",
       numHands: 1
     });
+
+    // 创建面部模型 (用于眼动/头部追踪)
+    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+        delegate: "GPU"
+      },
+      outputFaceBlendshapes: false,
+      runningMode: "VIDEO",
+      numFaces: 1
+    });
+
     console.log("模型加载成功");
     enableCam();
   } catch (error) {
@@ -25,7 +40,7 @@ async function createHandLandmarker() {
 
 // 2. 开启摄像头
 function enableCam() {
-  if (!handLandmarker) return;
+  if (!handLandmarker || !faceLandmarker) return;
 
   navigator.mediaDevices.getUserMedia({ 
       video: { 
@@ -59,23 +74,41 @@ async function predictWebcam() {
   try {
       // 使用 performance.now() 作为时间戳
       const startTimeMs = performance.now();
-      const results = handLandmarker.detectForVideo(video, startTimeMs);
+      
+      // 并行运行手部和面部检测
+      const [handResults, faceResults] = await Promise.all([
+          handLandmarker.detectForVideo(video, startTimeMs),
+          faceLandmarker.detectForVideo(video, startTimeMs)
+      ]);
 
-      // 如果检测到了手
-      if (results.landmarks && results.landmarks.length > 0) {
-          console.log("🖐️ 抓到了！发送数据..."); // 这一行出现说明成功了
-          
+      // 处理手部数据
+      if (handResults.landmarks && handResults.landmarks.length > 0) {
           chrome.runtime.sendMessage({
               type: 'HAND_DATA',
-              landmarks: results.landmarks[0]
+              landmarks: handResults.landmarks[0]
           }).catch(() => {});
-      } else {
-          // 如果数组是空的，打印个简单的点，证明还在跑，只是没看到手
-          console.log("."); 
       }
+
+      // 处理面部/眼动数据
+      if (faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) {
+          const face = faceResults.faceLandmarks[0];
+          // 取左右虹膜中心 (468: 左虹膜, 473: 右虹膜) 的平均值作为注视点
+          const leftIris = face[468];
+          const rightIris = face[473];
+          const gazePoint = {
+              x: (leftIris.x + rightIris.x) / 2,
+              y: (leftIris.y + rightIris.y) / 2
+          };
+
+          chrome.runtime.sendMessage({
+              type: 'GAZE_DATA',
+              gaze: gazePoint
+          }).catch(() => {});
+      }
+
   } catch (e) {
       console.log("检测出错:", e);
   }
 }
 
-createHandLandmarker();
+createLandmarkers();

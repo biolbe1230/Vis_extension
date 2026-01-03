@@ -76,6 +76,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleTabSwitch(landmarks);
 
     // --- 逻辑 B: 转发给 Content (用于绘制和滚动) ---
+    forwardToContent(message);
+  } else if (message.type === 'GAZE_DATA') {
+    // --- 逻辑 C: 转发眼动数据给 Content ---
+    forwardToContent(message);
+  }
+});
+
+function forwardToContent(message) {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs.length === 0) return;
 
@@ -84,21 +92,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendHandMessage(tabId, message);
       });
     });
-  }
-});
+}
 
 function handleTabSwitch(landmarks) {
   const now = Date.now();
   // 冷却时间 1秒，防止误触
   if (now - lastSwitchTime < 1000) return;
 
-  // 要求：食指、中指伸直；无名指、小指收回
+  // 要求：食指、中指伸直；无名指、小指、大拇指收回
   const indexExtended = landmarks[8].y < landmarks[6].y;
   const middleExtended = landmarks[12].y < landmarks[10].y;
   const ringCurled = landmarks[16].y > landmarks[14].y;
   const pinkyCurled = landmarks[20].y > landmarks[18].y;
+  const thumbCurled = isThumbCurled(landmarks);
 
-  if (!(indexExtended && middleExtended && ringCurled && pinkyCurled)) return;
+  if (!(indexExtended && middleExtended && ringCurled && pinkyCurled && thumbCurled)) return;
 
   // 利用食指、中指的水平朝向决定切换方向
   const indexDir = landmarks[8].x - landmarks[6].x;
@@ -114,6 +122,29 @@ function handleTabSwitch(landmarks) {
     switchTab(1);
     lastSwitchTime = now;
   }
+}
+
+function isThumbCurled(landmarks) {
+  // 水平判断：拇指末端(4)与手腕要在 MCP(2) 同一侧
+  const wrist = landmarks[0];
+  const thumbMcp = landmarks[2];
+  const thumbTip = landmarks[4];
+
+  const wristSide = wrist.x - thumbMcp.x;
+  const tipSide = thumbTip.x - thumbMcp.x;
+
+  return isSameHorizontalSide(tipSide, wristSide);
+}
+
+function distance2D(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.hypot(dx, dy);
+}
+
+function isSameHorizontalSide(a, b) {
+  if (Math.abs(b) < 0.005) return Math.abs(a) < 0.005;
+  return (a >= 0) === (b >= 0);
 }
 
 function switchTab(direction) {
